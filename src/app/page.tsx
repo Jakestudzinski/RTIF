@@ -13,6 +13,8 @@ import {
   ChevronRight,
   Menu,
   X,
+  Check,
+  Loader2,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -22,6 +24,7 @@ function Navbar() {
   const links = [
     { label: "Home", href: "#home" },
     { label: "Services", href: "#services" },
+    { label: "Pricing", href: "#pricing" },
     { label: "About", href: "#about" },
     { label: "Contact", href: "#contact" },
   ];
@@ -375,6 +378,164 @@ function Contact() {
   );
 }
 
+const pricingTiers = [
+  {
+    tier: "basic",
+    name: "Basic Technology Consultation",
+    price: "£149",
+    description: "A focused 1-hour session to assess your technology needs.",
+    features: [
+      "1-hour consultation session",
+      "Technology assessment",
+      "Written summary & recommendations",
+      "Email follow-up support",
+    ],
+    highlighted: false,
+  },
+  {
+    tier: "mid",
+    name: "Mid Tier Technology Consultation",
+    price: "£499",
+    description: "A comprehensive half-day engagement for deeper planning.",
+    features: [
+      "Half-day consultation",
+      "Full systems review",
+      "Architecture planning",
+      "Detailed roadmap document",
+      "2 weeks email support",
+    ],
+    highlighted: true,
+  },
+  {
+    tier: "allin",
+    name: "All-In Consultation",
+    price: "£1,499",
+    description: "Full-service multi-day engagement with ongoing support.",
+    features: [
+      "Multi-day on-site or remote",
+      "Complete systems build planning",
+      "Fulfilment strategy & setup",
+      "Implementation support",
+      "30 days priority support",
+      "Dedicated account manager",
+    ],
+    highlighted: false,
+  },
+];
+
+function Pricing() {
+  const [loading, setLoading] = useState<string | null>(null);
+
+  async function handleCheckout(tier: string) {
+    setLoading(tier);
+    try {
+      const res = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tier }),
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        alert(data.error || "Something went wrong. Please try again.");
+      }
+    } catch {
+      alert("Network error. Please try again.");
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  return (
+    <section id="pricing" className="py-20 sm:py-28">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="text-center max-w-2xl mx-auto mb-16">
+          <p className="text-sm font-semibold text-primary-600 uppercase tracking-wide mb-2">
+            Pricing
+          </p>
+          <h2 className="text-3xl sm:text-4xl font-extrabold text-gray-900">
+            Consultation Packages
+          </h2>
+          <p className="mt-4 text-gray-600 leading-relaxed">
+            Choose the consultation tier that fits your needs. Every package
+            includes expert guidance from our technology and fulfilment team.
+          </p>
+        </div>
+
+        <div className="grid md:grid-cols-3 gap-8 items-stretch">
+          {pricingTiers.map((t) => (
+            <div
+              key={t.tier}
+              className={`relative flex flex-col rounded-2xl p-8 border transition-all duration-200 ${
+                t.highlighted
+                  ? "bg-primary-600 text-white border-primary-600 shadow-xl shadow-primary-600/20 scale-[1.02]"
+                  : "bg-white text-gray-900 border-gray-200 hover:border-primary-200 hover:shadow-md"
+              }`}
+            >
+              {t.highlighted && (
+                <span className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-white text-primary-600 text-xs font-bold shadow-sm">
+                  Most Popular
+                </span>
+              )}
+              <h3
+                className={`text-lg font-bold mb-1 ${
+                  t.highlighted ? "text-white" : "text-gray-900"
+                }`}
+              >
+                {t.name}
+              </h3>
+              <p
+                className={`text-sm mb-6 ${
+                  t.highlighted ? "text-primary-100" : "text-gray-500"
+                }`}
+              >
+                {t.description}
+              </p>
+              <p className="mb-6">
+                <span className="text-4xl font-extrabold">{t.price}</span>
+                <span
+                  className={`text-sm ml-1 ${
+                    t.highlighted ? "text-primary-200" : "text-gray-400"
+                  }`}
+                >
+                  one-time
+                </span>
+              </p>
+              <ul className="space-y-3 mb-8 flex-1">
+                {t.features.map((f) => (
+                  <li key={f} className="flex items-start gap-2 text-sm">
+                    <Check
+                      className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+                        t.highlighted ? "text-primary-200" : "text-primary-600"
+                      }`}
+                    />
+                    <span>{f}</span>
+                  </li>
+                ))}
+              </ul>
+              <button
+                onClick={() => handleCheckout(t.tier)}
+                disabled={loading === t.tier}
+                className={`w-full py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2 ${
+                  t.highlighted
+                    ? "bg-white text-primary-600 hover:bg-primary-50"
+                    : "bg-primary-600 text-white hover:bg-primary-700"
+                } disabled:opacity-70`}
+              >
+                {loading === t.tier ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : null}
+                {loading === t.tier ? "Redirecting..." : "Get Started"}
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function Footer() {
   return (
     <footer className="bg-gray-900 text-gray-400 py-12">
@@ -402,6 +563,7 @@ export default function Home() {
       <Navbar />
       <Hero />
       <Services />
+      <Pricing />
       <About />
       <Contact />
       <Footer />
