@@ -14,6 +14,7 @@ src/app/
       ├── checkout/route.ts                 — Stripe Checkout for consultation tiers
       └── payment-gateway/
           ├── create-intent/route.ts        — Creates PaymentIntents with generic descriptions
+          ├── redirect/route.ts             — Redirect handler for Klarna/Affirm return URLs
           └── webhook/route.ts              — Receives Stripe webhooks and notifies the peptide store
 ```
 
@@ -25,11 +26,12 @@ create PaymentIntents using generic descriptions.
 
 ### How It Works
 
-1. External store sends a `POST` to `/api/payment-gateway/create-intent` with `amount` (in dollars, e.g. `49.99`), `ref`, and the shared secret
-2. This API converts the dollar amount to cents (`Math.round(amount * 100)`), selects a generic description based on the amount tier, and creates a Stripe PaymentIntent — returning the `clientSecret`
-3. The external store uses the `clientSecret` to confirm payment on the client side
-4. Stripe sends a webhook to `/api/payment-gateway/webhook` on success or failure
-5. The webhook route forwards the result to the external store's callback URL
+1. External store sends a `POST` to `/api/payment-gateway/create-intent` with `amount` (in dollars, e.g. `49.99`), `ref`, optional `returnUrl`, and the shared secret
+2. This API converts the dollar amount to cents (`Math.round(amount * 100)`), selects a generic description based on the amount tier, enables Klarna/Affirm for orders >= $35, and creates a Stripe PaymentIntent — returning `clientSecret`, `publishableKey`, and `returnUrl`
+3. The external store uses the `clientSecret` and `publishableKey` to confirm payment on the client side
+4. For redirect-based methods (Klarna, Affirm), Stripe redirects to `/api/payment-gateway/redirect` which forwards the user back to the external store's `returnUrl`
+5. Stripe sends a webhook to `/api/payment-gateway/webhook` on success or failure
+6. The webhook route forwards the result (with amount converted back to dollars) to the external store's callback URL — only for PaymentIntents with `source=payment-gateway` metadata
 
 ### Description Tiers
 
@@ -53,6 +55,12 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 
 # Shared secret for authenticating requests from the external store
 PAYMENT_GATEWAY_SECRET=<generate-a-strong-random-string>
+
+# Site URL for redirect-based payment methods (Klarna, Affirm)
+NEXT_PUBLIC_SITE_URL=https://www.research-tif.com
+
+# Comma-separated list of allowed redirect domains (leave empty to allow all)
+GATEWAY_ALLOWED_REDIRECT_DOMAINS=
 
 # External store callback URL for webhook notifications
 PEPTIDE_STORE_WEBHOOK_URL=https://your-store.com/api/webhooks/payment-gateway
@@ -88,6 +96,7 @@ npm run dev
 
 - All requests from the external store are authenticated via `x-gateway-secret` header matching `PAYMENT_GATEWAY_SECRET`
 - Stripe sees only generic descriptions — no product names, customer details, or order specifics
-- The only metadata stored on the PaymentIntent is an opaque `ref` (internal order reference)
+- The only metadata stored on the PaymentIntent is an opaque `ref` and `source=payment-gateway`
+- Redirect domains can be restricted via `GATEWAY_ALLOWED_REDIRECT_DOMAINS`
 - Webhook callbacks to the external store are also authenticated with the shared secret
 - API keys are stored in environment variables and never committed to source control

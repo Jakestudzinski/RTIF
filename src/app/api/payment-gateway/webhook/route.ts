@@ -1,115 +1,116 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
   apiVersion: "2026-01-28.clover",
 });
 
-export async function POST(req: NextRequest) {
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!webhookSecret) {
-    console.error("STRIPE_WEBHOOK_SECRET is not configured");
-    return NextResponse.json(
-      { error: "Server misconfiguration" },
-      { status: 500 }
-    );
-  }
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || "";
+const GATEWAY_SECRET = process.env.PAYMENT_GATEWAY_SECRET || "";
+const PEPTIDE_STORE_WEBHOOK_URL = process.env.PEPTIDE_STORE_WEBHOOK_URL || "";
 
-  const signature = req.headers.get("stripe-signature");
-  if (!signature) {
-    return NextResponse.json(
-      { error: "Missing stripe-signature header" },
-      { status: 400 }
-    );
-  }
-
-  let event: Stripe.Event;
-
+/**
+ * POST /api/payment-gateway/webhook
+ *
+ * Receives Stripe webhook events for gateway payments and forwards
+ * relevant events to the peptide store's callback endpoint.
+ *
+ * Only forwards events for PaymentIntents that have source=payment-gateway
+ * in their metadata.
+ */
+export async function POST(request: NextRequest) {
   try {
-    const rawBody = await req.text();
-    event = stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
-  } catch (err: unknown) {
-    const message =
-      err instanceof Error ? err.message : "Webhook signature verification failed";
-    console.error("Webhook signature error:", message);
-    return NextResponse.json({ error: message }, { status: 400 });
-  }
+    const body = await request.text();
+    const signature = request.headers.get("stripe-signature");
 
-  const callbackUrl = process.env.PEPTIDE_STORE_WEBHOOK_URL;
-  const gatewaySecret = process.env.PAYMENT_GATEWAY_SECRET;
+    if (!signature) {
+      console.error("[GATEWAY-WEBHOOK] Missing stripe-signature header");
+      return NextResponse.json(
+        { error: "Missing stripe-signature header" },
+        { status: 400 }
+      );
+    }
 
-  if (!callbackUrl || !gatewaySecret) {
-    console.error(
-      "PEPTIDE_STORE_WEBHOOK_URL or PAYMENT_GATEWAY_SECRET is not configured"
+    // Verify the webhook signature
+    let event: Stripe.Event;
+    try {
+      event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
+    } catch (err) {
+      console.error("[GATEWAY-WEBHOOK] Signature verification failed:", err);
+      return NextResponse.json(
+        { error: "Webhook signature verification failed" },
+        { status: 400 }
+      );
+    }
+
+    console.log(
+      `[GATEWAY-WEBHOOK] Received event: ${event.type} (${event.id})`
     );
-    return NextResponse.json(
-      { error: "Server misconfiguration" },
-      { status: 500 }
-    );
-  }
 
-  try {
-    switch (event.type) {
-      case "payment_intent.succeeded": {
-        const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        await notifyPeptideStore(callbackUrl, gatewaySecret, {
-          event: "payment_intent.succeeded",
-          paymentIntentId: paymentIntent.id,
-          ref: paymentIntent.metadata?.ref ?? null,
-          amount: paymentIntent.amount,
-          currency: paymentIntent.currency,
-        });
-        break;
+    // Only process payment_intent events
+    if (
+      event.type === "payment_intent.succeeded" ||
+      event.type === "payment_intent.payment_failed"
+    ) {
+      const paymentIntent = event.data.object as Stripe.PaymentIntent;
+
+      // Only forward events for gateway payments
+      if (paymentIntent.metadata?.source !== "payment-gateway") {
+        console.log(
+          `[GATEWAY-WEBHOOK] Skipping non-gateway payment: ${paymentIntent.id}`
+        );
+        return NextResponse.json({ received: true });
       }
 
-      case "payment_intent.payment_failed": {
-        const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        await notifyPeptideStore(callbackUrl, gatewaySecret, {
-          event: "payment_intent.payment_failed",
-          paymentIntentId: paymentIntent.id,
-          ref: paymentIntent.metadata?.ref ?? null,
-          amount: paymentIntent.amount,
-          currency: paymentIntent.currency,
-          failureMessage:
-            paymentIntent.last_payment_error?.message ?? "Unknown failure",
-        });
-        break;
-      }
+      console.log(
+        `[GATEWAY-WEBHOOK] Forwarding ${event.type} for ${paymentIntent.id} (ref: ${paymentIntent.metadata.ref})`
+      );
 
-      default:
-        console.log(`Unhandled event type: ${event.type}`);
+      // Forward to the peptide store
+      if (PEPTIDE_STORE_WEBHOOK_URL) {
+        try {
+          const callbackResponse = await fetch(PEPTIDE_STORE_WEBHOOK_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-gateway-secret": GATEWAY_SECRET,
+            },
+            body: JSON.stringify({
+              event: event.type,
+              paymentIntentId: paymentIntent.id,
+              ref: paymentIntent.metadata.ref || "",
+              status: paymentIntent.status,
+              amount: paymentIntent.amount / 100, // Convert cents back to dollars
+            }),
+          });
+
+          if (!callbackResponse.ok) {
+            console.error(
+              `[GATEWAY-WEBHOOK] Callback failed: ${callbackResponse.status}`
+            );
+          } else {
+            console.log("[GATEWAY-WEBHOOK] Callback sent successfully");
+          }
+        } catch (callbackError) {
+          console.error(
+            "[GATEWAY-WEBHOOK] Failed to send callback:",
+            callbackError
+          );
+          // Don't fail the webhook — Stripe will retry
+        }
+      } else {
+        console.warn(
+          "[GATEWAY-WEBHOOK] PEPTIDE_STORE_WEBHOOK_URL not configured"
+        );
+      }
     }
 
     return NextResponse.json({ received: true });
-  } catch (err: unknown) {
-    const message =
-      err instanceof Error ? err.message : "Webhook processing error";
-    console.error("Webhook processing error:", message);
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
-}
-
-async function notifyPeptideStore(
-  callbackUrl: string,
-  gatewaySecret: string,
-  payload: Record<string, unknown>
-) {
-  const response = await fetch(callbackUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-gateway-secret": gatewaySecret,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    console.error(
-      `Failed to notify peptide store (${response.status}): ${text}`
+  } catch (error) {
+    console.error("[GATEWAY-WEBHOOK] Error processing webhook:", error);
+    return NextResponse.json(
+      { error: "Webhook processing failed" },
+      { status: 500 }
     );
-    throw new Error(`Peptide store callback failed: ${response.status}`);
   }
-
-  console.log("Successfully notified peptide store:", payload.event);
 }

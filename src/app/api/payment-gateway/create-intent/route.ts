@@ -1,81 +1,108 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
   apiVersion: "2026-01-28.clover",
 });
 
-const DESCRIPTION_TIERS = [
-  { max: 100, description: "Basic Technology Consultation" },
-  { max: 500, description: "Mid Tier Technology Consultation" },
-  { max: Infinity, description: "All-In Consultation" },
-];
+const GATEWAY_SECRET = process.env.PAYMENT_GATEWAY_SECRET || "";
+const GATEWAY_REDIRECT_BASE =
+  process.env.NEXT_PUBLIC_SITE_URL || "https://www.research-tif.com";
 
-function getGenericDescription(amountDollars: number): string {
-  for (const tier of DESCRIPTION_TIERS) {
-    if (amountDollars <= tier.max) {
-      return tier.description;
-    }
-  }
+/**
+ * Determine the generic Stripe description based on order amount.
+ */
+function getDescription(amount: number): string {
+  if (amount <= 100) return "Basic Technology Consultation";
+  if (amount <= 500) return "Mid Tier Technology Consultation";
   return "All-In Consultation";
 }
 
-export async function POST(req: NextRequest) {
+/**
+ * POST /api/payment-gateway/create-intent
+ *
+ * Creates a Stripe PaymentIntent on research-tif.com's Stripe account
+ * with a generic description.
+ *
+ * Request body:
+ *   amount        - dollar amount (e.g. 149.99)
+ *   ref           - opaque internal reference (e.g. order number or request ID)
+ *   returnUrl     - URL to redirect to after payment (for redirect-based methods)
+ *
+ * Response:
+ *   clientSecret        - Stripe PaymentIntent client secret
+ *   paymentIntentId     - Stripe PaymentIntent ID
+ *   publishableKey      - The publishable key the frontend should use
+ *   returnUrl           - Redirect URL through research-tif.com (if returnUrl was provided)
+ */
+export async function POST(request: NextRequest) {
   try {
-    const gatewaySecret = process.env.PAYMENT_GATEWAY_SECRET;
-    if (!gatewaySecret) {
-      console.error("PAYMENT_GATEWAY_SECRET is not configured");
-      return NextResponse.json(
-        { error: "Server misconfiguration" },
-        { status: 500 }
-      );
-    }
-
-    const authHeader = req.headers.get("x-gateway-secret");
-    if (!authHeader || authHeader !== gatewaySecret) {
+    // Authenticate the request
+    const authHeader = request.headers.get("x-gateway-secret");
+    if (!authHeader || authHeader !== GATEWAY_SECRET) {
+      console.error("[PAYMENT-GATEWAY] Unauthorized request");
       return NextResponse.json(
         { error: "Unauthorized" },
         { status: 401 }
       );
     }
 
-    const body = await req.json();
-    const { amount, ref } = body;
+    const body = await request.json();
+    const { amount, ref, returnUrl } = body;
 
+    // Validate amount
     if (!amount || typeof amount !== "number" || amount <= 0) {
       return NextResponse.json(
-        { error: "Invalid amount. Must be a positive number in dollars (e.g. 49.99)." },
+        { error: "Invalid amount" },
         { status: 400 }
       );
     }
 
-    const amountCents = Math.round(amount * 100);
-
-    if (!ref || typeof ref !== "string") {
-      return NextResponse.json(
-        { error: "Invalid ref. Must be a non-empty string." },
-        { status: 400 }
-      );
+    // Determine payment methods based on amount
+    // Klarna and Affirm require minimum $35
+    const paymentMethodTypes: string[] = ["card"];
+    if (amount >= 35) {
+      paymentMethodTypes.push("klarna");
+      paymentMethodTypes.push("affirm");
     }
 
-    const description = getGenericDescription(amount);
+    const description = getDescription(amount);
+    const amountInCents = Math.round(amount * 100);
 
+    console.log(
+      `[PAYMENT-GATEWAY] Creating intent: $${amount.toFixed(2)} (${amountInCents} cents) — "${description}" ref=${ref || "none"}`
+    );
+
+    // Create PaymentIntent with ONLY generic info — no product details, no customer PII
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: amountCents,
+      amount: amountInCents,
       currency: "usd",
+      payment_method_types: paymentMethodTypes,
       description,
-      metadata: { ref },
+      metadata: {
+        ref: ref || "",
+        source: "payment-gateway",
+      },
     });
+
+    console.log(`[PAYMENT-GATEWAY] Created: ${paymentIntent.id}`);
+
+    // Build a redirect URL through research-tif.com so Stripe never sees the end client domain
+    const redirectUrl = returnUrl
+      ? `${GATEWAY_REDIRECT_BASE}/api/payment-gateway/redirect?dest=${encodeURIComponent(returnUrl)}&ref=${encodeURIComponent(ref || "")}`
+      : undefined;
 
     return NextResponse.json({
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
       publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || "",
+      returnUrl: redirectUrl,
     });
-  } catch (err: unknown) {
-    const message =
-      err instanceof Error ? err.message : "Internal server error";
-    console.error("Payment gateway create-intent error:", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch (error) {
+    console.error("[PAYMENT-GATEWAY] Error creating payment intent:", error);
+    return NextResponse.json(
+      { error: "Failed to create payment intent" },
+      { status: 500 }
+    );
   }
 }
