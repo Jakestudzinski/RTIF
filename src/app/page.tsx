@@ -302,7 +302,7 @@ function Contact() {
                 <div className="w-10 h-10 rounded-lg bg-primary-50 flex items-center justify-center">
                   <Mail className="w-5 h-5 text-primary-600" />
                 </div>
-                <span className="text-sm">contact@rtif.com</span>
+                <span className="text-sm">contact@research-tif.com</span>
               </div>
               <div className="flex items-center gap-3 text-gray-600">
                 <div className="w-10 h-10 rounded-lg bg-primary-50 flex items-center justify-center">
