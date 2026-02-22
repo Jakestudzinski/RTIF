@@ -13,19 +13,19 @@ const PRODUCTS: Record<
     name: "Basic Technology Consultation",
     description:
       "A focused 1-hour session covering technology assessment, recommendations, and a written summary.",
-    price: 14900, // £149.00 in pence
+    price: 14900, // $149.00 in cents
   },
   mid: {
     name: "Mid Tier Technology Consultation",
     description:
       "A comprehensive half-day engagement including systems review, architecture planning, and a detailed roadmap.",
-    price: 49900, // £499.00
+    price: 49900, // $499.00
   },
   allin: {
     name: "All-In Consultation",
     description:
-      "Full-service multi-day consultation with hands-on systems build planning, fulfilment strategy, and ongoing support.",
-    price: 149900, // £1,499.00
+      "Full-service multi-day consultation with hands-on systems build planning, fulfillment strategy, and ongoing support.",
+    price: 149900, // $1,499.00
   },
 };
 
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
       line_items: [
         {
           price_data: {
-            currency: "gbp",
+            currency: "usd",
             product_data: {
               name: product.name,
               description: product.description,

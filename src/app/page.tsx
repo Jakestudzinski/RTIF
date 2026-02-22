@@ -108,17 +108,17 @@ function Hero() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary-100 text-primary-700 text-xs font-semibold mb-6">
           <Cpu className="w-3.5 h-3.5" />
-          Technology &middot; Innovation &middot; Fulfilment
+          Technology &middot; Innovation &middot; Fulfillment
         </div>
 
         <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-gray-900 leading-tight">
           Research Technology
           <br />
-          <span className="text-primary-600">Innovation &amp; Fulfilment</span>
+          <span className="text-primary-600">Innovation &amp; Fulfillment</span>
         </h1>
 
         <p className="mt-6 max-w-2xl mx-auto text-lg text-gray-600 leading-relaxed">
-          From custom technology builds to complete order fulfilment — RTIF is
+          From custom technology builds to complete order fulfillment — RTIF is
           your end-to-end partner for turning ideas into delivered products.
         </p>
 
@@ -162,9 +162,9 @@ const services = [
   },
   {
     icon: Package,
-    title: "Order Fulfilment",
+    title: "Order Fulfillment",
     description:
-      "Complete pick, pack, and ship fulfilment for all orders. We handle inventory, packaging, and delivery logistics.",
+      "Complete pick, pack, and ship fulfillment for all orders. We handle inventory, packaging, and delivery logistics.",
   },
   {
     icon: Truck,
@@ -189,10 +189,10 @@ function Services() {
             What We Do
           </p>
           <h2 className="text-3xl sm:text-4xl font-extrabold text-gray-900">
-            Technology Builds &amp; Fulfilment
+            Technology Builds &amp; Fulfillment
           </h2>
           <p className="mt-4 text-gray-600 leading-relaxed">
-            We combine deep technical expertise with streamlined fulfilment
+            We combine deep technical expertise with streamlined fulfillment
             operations to deliver complete solutions under one roof.
           </p>
         </div>
@@ -242,13 +242,13 @@ function About() {
               to customer
             </h2>
             <p className="mt-6 text-gray-600 leading-relaxed">
-              Research Technology Innovation &amp; Fulfilment (RTIF) bridges the
+              Research Technology Innovation &amp; Fulfillment (RTIF) bridges the
               gap between technology creation and product delivery. We design,
               build, and ship — so you can focus on growing your business.
             </p>
             <p className="mt-4 text-gray-600 leading-relaxed">
               Whether you need a single custom workstation or full-scale
-              fulfilment for thousands of orders, our team has the expertise and
+              fulfillment for thousands of orders, our team has the expertise and
               infrastructure to deliver with precision and speed.
             </p>
             <a
@@ -293,7 +293,7 @@ function Contact() {
               Let&apos;s build something great
             </h2>
             <p className="mt-4 text-gray-600 leading-relaxed">
-              Ready to start your next project or need fulfilment support?
+              Ready to start your next project or need fulfillment support?
               Reach out and our team will get back to you within 24 hours.
             </p>
 
@@ -302,19 +302,19 @@ function Contact() {
                 <div className="w-10 h-10 rounded-lg bg-primary-50 flex items-center justify-center">
                   <Mail className="w-5 h-5 text-primary-600" />
                 </div>
-                <span className="text-sm">contact@rtif.co.uk</span>
+                <span className="text-sm">contact@rtif.com</span>
               </div>
               <div className="flex items-center gap-3 text-gray-600">
                 <div className="w-10 h-10 rounded-lg bg-primary-50 flex items-center justify-center">
                   <Phone className="w-5 h-5 text-primary-600" />
                 </div>
-                <span className="text-sm">+44 (0) 123 456 7890</span>
+                <span className="text-sm">(480) 869-5842</span>
               </div>
               <div className="flex items-center gap-3 text-gray-600">
                 <div className="w-10 h-10 rounded-lg bg-primary-50 flex items-center justify-center">
                   <MapPin className="w-5 h-5 text-primary-600" />
                 </div>
-                <span className="text-sm">United Kingdom</span>
+                <span className="text-sm">37142 N Longview St, San Tan Valley, AZ 85140</span>
               </div>
             </div>
           </div>
@@ -382,7 +382,7 @@ const pricingTiers = [
   {
     tier: "basic",
     name: "Basic Technology Consultation",
-    price: "£149",
+    price: "$149",
     description: "A focused 1-hour session to assess your technology needs.",
     features: [
       "1-hour consultation session",
@@ -395,7 +395,7 @@ const pricingTiers = [
   {
     tier: "mid",
     name: "Mid Tier Technology Consultation",
-    price: "£499",
+    price: "$499",
     description: "A comprehensive half-day engagement for deeper planning.",
     features: [
       "Half-day consultation",
@@ -409,12 +409,12 @@ const pricingTiers = [
   {
     tier: "allin",
     name: "All-In Consultation",
-    price: "£1,499",
+    price: "$1,499",
     description: "Full-service multi-day engagement with ongoing support.",
     features: [
       "Multi-day on-site or remote",
       "Complete systems build planning",
-      "Fulfilment strategy & setup",
+      "Fulfillment strategy & setup",
       "Implementation support",
       "30 days priority support",
       "Dedicated account manager",
@@ -459,7 +459,7 @@ function Pricing() {
           </h2>
           <p className="mt-4 text-gray-600 leading-relaxed">
             Choose the consultation tier that fits your needs. Every package
-            includes expert guidance from our technology and fulfilment team.
+            includes expert guidance from our technology and fulfillment team.
           </p>
         </div>
 
@@ -549,7 +549,7 @@ function Footer() {
           </div>
           <p className="text-sm">
             &copy; {new Date().getFullYear()} Research Technology Innovation &amp;
-            Fulfilment. All rights reserved.
+            Fulfillment. All rights reserved.
           </p>
         </div>
       </div>
