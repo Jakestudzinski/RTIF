@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import Stripe from 'stripe'
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
-  apiVersion: '2025-10-29.clover',
+  apiVersion: '2026-01-28.clover',
 })
 
 const GATEWAY_SECRET = process.env.PAYMENT_GATEWAY_SECRET || ''
