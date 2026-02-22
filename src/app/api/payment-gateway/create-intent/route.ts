@@ -27,13 +27,11 @@ function getDescription(amount: number): string {
  * Request body:
  *   amount        - dollar amount (e.g. 149.99)
  *   ref           - opaque internal reference (e.g. order number or request ID)
- *   returnUrl     - URL to redirect to after payment (for redirect-based methods)
  *
  * Response:
  *   clientSecret        - Stripe PaymentIntent client secret
  *   paymentIntentId     - Stripe PaymentIntent ID
  *   publishableKey      - The publishable key the frontend should use
- *   returnUrl           - Redirect URL through research-tif.com (if returnUrl was provided)
  */
 export async function POST(request: NextRequest) {
   try {
@@ -48,7 +46,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { amount, ref, returnUrl } = body;
+    const { amount, ref } = body;
 
     // Validate amount
     if (!amount || typeof amount !== "number" || amount <= 0) {
@@ -87,10 +85,10 @@ export async function POST(request: NextRequest) {
 
     console.log(`[PAYMENT-GATEWAY] Created: ${paymentIntent.id}`);
 
-    // Build a redirect URL through research-tif.com so Stripe never sees the end client domain
-    const redirectUrl = returnUrl
-      ? `${GATEWAY_REDIRECT_BASE}/api/payment-gateway/redirect?dest=${encodeURIComponent(returnUrl)}&ref=${encodeURIComponent(ref || "")}`
-      : undefined;
+    // Build a redirect URL through research-tif.com — only contains the opaque ref,
+    // never the client's domain. The redirect endpoint resolves the destination
+    // from a server-side env var (GATEWAY_CLIENT_REDIRECT_URL).
+    const redirectUrl = `${GATEWAY_REDIRECT_BASE}/api/payment-gateway/redirect?ref=${encodeURIComponent(ref || "")}`;
 
     return NextResponse.json({
       clientSecret: paymentIntent.client_secret,

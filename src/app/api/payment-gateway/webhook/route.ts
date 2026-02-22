@@ -9,6 +9,14 @@ const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || "";
 const GATEWAY_SECRET = process.env.PAYMENT_GATEWAY_SECRET || "";
 const PEPTIDE_STORE_WEBHOOK_URL = process.env.PEPTIDE_STORE_WEBHOOK_URL || "";
 
+// Startup diagnostics
+console.log(
+  "[GATEWAY-WEBHOOK] PEPTIDE_STORE_WEBHOOK_URL:",
+  PEPTIDE_STORE_WEBHOOK_URL
+    ? `${PEPTIDE_STORE_WEBHOOK_URL.substring(0, 40)}...`
+    : "NOT SET — callbacks will fail!"
+);
+
 /**
  * POST /api/payment-gateway/webhook
  *
@@ -103,6 +111,21 @@ export async function POST(request: NextRequest) {
           "[GATEWAY-WEBHOOK] PEPTIDE_STORE_WEBHOOK_URL not configured"
         );
       }
+    }
+
+    // Known events we don't need to act on — acknowledge silently
+    const ignoredEvents = [
+      "payment_intent.created",
+      "charge.succeeded",
+      "charge.updated",
+      "charge.failed",
+    ];
+    if (ignoredEvents.includes(event.type)) {
+      console.log(
+        `[GATEWAY-WEBHOOK] Acknowledged (no action needed): ${event.type}`
+      );
+    } else {
+      console.log(`[GATEWAY-WEBHOOK] Unhandled event type: ${event.type}`);
     }
 
     return NextResponse.json({ received: true });
