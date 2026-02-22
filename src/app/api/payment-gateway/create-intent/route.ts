@@ -6,14 +6,14 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 });
 
 const DESCRIPTION_TIERS = [
-  { max: 10000, description: "Basic Technology Consultation" },
-  { max: 50000, description: "Mid Tier Technology Consultation" },
+  { max: 100, description: "Basic Technology Consultation" },
+  { max: 500, description: "Mid Tier Technology Consultation" },
   { max: Infinity, description: "All-In Consultation" },
 ];
 
-function getGenericDescription(amountCents: number): string {
+function getGenericDescription(amountDollars: number): string {
   for (const tier of DESCRIPTION_TIERS) {
-    if (amountCents <= tier.max) {
+    if (amountDollars <= tier.max) {
       return tier.description;
     }
   }
@@ -44,10 +44,12 @@ export async function POST(req: NextRequest) {
 
     if (!amount || typeof amount !== "number" || amount <= 0) {
       return NextResponse.json(
-        { error: "Invalid amount. Must be a positive number in cents." },
+        { error: "Invalid amount. Must be a positive number in dollars (e.g. 49.99)." },
         { status: 400 }
       );
     }
+
+    const amountCents = Math.round(amount * 100);
 
     if (!ref || typeof ref !== "string") {
       return NextResponse.json(
@@ -59,7 +61,7 @@ export async function POST(req: NextRequest) {
     const description = getGenericDescription(amount);
 
     const paymentIntent = await stripe.paymentIntents.create({
-      amount,
+      amount: amountCents,
       currency: "usd",
       description,
       metadata: { ref },

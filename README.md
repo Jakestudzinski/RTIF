@@ -25,8 +25,8 @@ create PaymentIntents using generic descriptions.
 
 ### How It Works
 
-1. External store sends a `POST` to `/api/payment-gateway/create-intent` with `amount`, `ref`, and the shared secret
-2. This API creates a Stripe PaymentIntent with a generic description (based on amount tier) and returns the `clientSecret`
+1. External store sends a `POST` to `/api/payment-gateway/create-intent` with `amount` (in dollars, e.g. `49.99`), `ref`, and the shared secret
+2. This API converts the dollar amount to cents (`Math.round(amount * 100)`), selects a generic description based on the amount tier, and creates a Stripe PaymentIntent — returning the `clientSecret`
 3. The external store uses the `clientSecret` to confirm payment on the client side
 4. Stripe sends a webhook to `/api/payment-gateway/webhook` on success or failure
 5. The webhook route forwards the result to the external store's callback URL
