@@ -1,67 +1,110 @@
-# Research-TIF Stripe Payment Gateway
+# Research-TIF Multi-Tenant Payment Gateway
 
-This directory contains the API route code to deploy on **research-tif.com** (Next.js).
-The peptide store calls these endpoints to create Stripe PaymentIntents using
+A multi-tenant Stripe payment gateway hosted on **research-tif.com** (Next.js).
+Multiple client businesses route payments through this single gateway using
 research-tif.com's Stripe account with generic descriptions.
 
-## Setup
+## Architecture
 
-### 1. Copy files to research-tif.com project
+```
+Client Business A ──┐
+Client Business B ──┼──▶ research-tif.com gateway ──▶ Stripe
+Client Business C ──┘         │
+                              ├── create-intent (creates PaymentIntent)
+                              ├── webhook (forwards payment events to correct client)
+                              └── redirect (bounces Klarna/Affirm users back to correct client)
+```
 
-Copy the contents of `api-routes/` into your Next.js `src/app/api/` directory:
+Each client is identified by a unique shared secret. The gateway stores the
+client ID in Stripe PaymentIntent metadata so webhooks and redirects route
+to the correct business automatically.
+
+## File Structure
 
 ```
 src/app/api/payment-gateway/
-  ├── create-intent/route.ts   — Creates PaymentIntents with generic descriptions
-  └── webhook/route.ts         — Receives Stripe webhooks and notifies the peptide store
+  ├── clients.json             — Client configuration (secrets, URLs)
+  ├── clients.ts               — Client lookup utility
+  ├── create-intent/route.ts   — Creates PaymentIntents
+  ├── webhook/route.ts         — Receives Stripe webhooks, forwards to clients
+  └── redirect/route.ts        — Handles Klarna/Affirm return redirects
 ```
 
-### 2. Environment Variables (research-tif.com)
+## Adding a New Client Business
 
-Add these to your `.env.local` on research-tif.com:
-
-```env
-# Stripe keys (research-tif.com's own Stripe account)
-STRIPE_SECRET_KEY=sk_live_...
-NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-
-# Shared secret for authenticating requests
-PAYMENT_GATEWAY_SECRET=<generate-a-strong-random-string>
-
-# Peptide store callback URL for webhook notifications
-PEPTIDE_STORE_WEBHOOK_URL=https://your-peptide-store.com/api/webhooks/payment-gateway
-```
-
-### 3. Environment Variables (peptide store)
-
-Add these to the peptide store's `.env.local`:
-
-```env
-# Payment gateway configuration
-PAYMENT_GATEWAY_URL=https://www.research-tif.com/api/payment-gateway
-PAYMENT_GATEWAY_SECRET=<same-secret-as-above>
-```
-
-### 4. Stripe Webhook (research-tif.com)
-
-In the Stripe Dashboard for research-tif.com's account, create a webhook endpoint:
-- URL: `https://www.research-tif.com/api/payment-gateway/webhook`
-- Events: `payment_intent.succeeded`, `payment_intent.payment_failed`
-
-### 5. Install Stripe dependency on research-tif.com
+### 1. Generate a shared secret
 
 ```bash
-npm install stripe
+openssl rand -hex 32
 ```
+
+### 2. Add the client to `clients.json`
+
+```json
+{
+  "clients": {
+    "peptide-store": {
+      "secret": "existing-secret-here",
+      "webhookUrl": "https://studzpeptides.com/api/webhooks/payment-gateway",
+      "redirectUrl": "https://studzpeptides.com/checkout/success",
+      "label": "Peptide Store"
+    },
+    "new-business": {
+      "secret": "the-generated-secret",
+      "webhookUrl": "https://new-business.com/api/webhooks/payment-gateway",
+      "redirectUrl": "https://new-business.com/checkout/success",
+      "label": "New Business"
+    }
+  }
+}
+```
+
+### 3. Deploy research-tif.com
+
+No code changes needed — just update `clients.json` and redeploy.
+
+### 4. Configure the client business
+
+Add these env vars to the client's `.env`:
+
+```env
+PAYMENT_GATEWAY_URL=https://www.research-tif.com/api/payment-gateway
+PAYMENT_GATEWAY_SECRET=<the-generated-secret>
+```
+
+### 5. Add client-side files
+
+The client business needs these files (see peptide store as reference):
+
+- **API route:** `src/app/api/payment/create-intent/route.ts` — calls the gateway
+- **Webhook receiver:** `src/app/api/webhooks/payment-gateway/route.ts` — receives payment status callbacks
+- **Payment form:** `src/components/StripeKlarnaPaymentForm.tsx` — renders Stripe Elements
+
+## Environment Variables (research-tif.com)
+
+| Variable | Required | Description |
+|---|---|---|
+| `STRIPE_SECRET_KEY` | Yes | research-tif.com's Stripe secret key |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Yes | research-tif.com's Stripe publishable key |
+| `STRIPE_WEBHOOK_SECRET` | Yes | Stripe webhook signing secret |
+| `NEXT_PUBLIC_SITE_URL` | No | Base URL for redirect (default: `https://www.research-tif.com`) |
+
+**Note:** Per-client secrets, webhook URLs, and redirect URLs are in `clients.json`, not env vars.
+
+## Stripe Dashboard Setup
+
+1. Create a webhook endpoint: `https://www.research-tif.com/api/payment-gateway/webhook`
+2. Subscribe to events: `payment_intent.succeeded`, `payment_intent.payment_failed`
+3. Enable desired payment methods (Card, Klarna, Affirm, Apple Pay, etc.)
 
 ## Security
 
-- All requests are authenticated with `PAYMENT_GATEWAY_SECRET`
+- Each client has a **unique shared secret** — compromising one doesn't affect others
 - Stripe sees only generic descriptions ("Basic Technology Consultation", etc.)
 - No product names, customer details, or order specifics are sent to Stripe
-- The only metadata stored on the PaymentIntent is an opaque `ref` (internal order reference)
-- Webhook callbacks to the peptide store are also authenticated with the shared secret
+- Client domains are **never exposed** in redirect URLs — resolved server-side from `clients.json`
+- Webhook callbacks to clients are authenticated with each client's own secret
+- PaymentIntent metadata contains only: `ref` (opaque), `source`, `clientId`
 
 ## Description Tiers
 

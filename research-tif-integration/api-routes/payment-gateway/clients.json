@@ -1,0 +1,10 @@
+{
+  "clients": {
+    "peptide-store": {
+      "secret": "REPLACE_WITH_STRONG_SECRET",
+      "webhookUrl": "https://yourdomain.com/api/webhooks/payment-gateway",
+      "redirectUrl": "https://yourdomain.com/checkout/success",
+      "label": "Peptide Store"
+    }
+  }
+}
