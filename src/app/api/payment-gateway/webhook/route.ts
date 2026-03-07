@@ -25,6 +25,12 @@ console.log(
  *
  * Only forwards events for PaymentIntents that have source=payment-gateway
  * in their metadata.
+ *
+ * Handled events:
+ *   payment_intent.succeeded
+ *   payment_intent.payment_failed
+ *   charge.refunded
+ *   charge.refund.updated
  */
 export async function POST(request: NextRequest) {
   try {
@@ -105,6 +111,77 @@ export async function POST(request: NextRequest) {
             callbackError
           );
           // Don't fail the webhook — Stripe will retry
+        }
+      } else {
+        console.warn(
+          "[GATEWAY-WEBHOOK] PEPTIDE_STORE_WEBHOOK_URL not configured"
+        );
+      }
+    }
+
+    // Handle refund events — these fire on Charge objects, so we need to
+    // retrieve the linked PaymentIntent to check gateway metadata
+    if (
+      event.type === "charge.refunded" ||
+      event.type === "charge.refund.updated"
+    ) {
+      const charge = event.data.object as Stripe.Charge;
+      const paymentIntentId =
+        typeof charge.payment_intent === "string"
+          ? charge.payment_intent
+          : charge.payment_intent?.id;
+
+      if (!paymentIntentId) {
+        console.log(
+          `[GATEWAY-WEBHOOK] Skipping ${event.type} — no linked PaymentIntent`
+        );
+        return NextResponse.json({ received: true });
+      }
+
+      // Retrieve the PI to check gateway metadata
+      const paymentIntent =
+        await stripe.paymentIntents.retrieve(paymentIntentId);
+      if (paymentIntent.metadata?.source !== "payment-gateway") {
+        console.log(
+          `[GATEWAY-WEBHOOK] Skipping non-gateway refund: ${paymentIntentId}`
+        );
+        return NextResponse.json({ received: true });
+      }
+
+      console.log(
+        `[GATEWAY-WEBHOOK] Forwarding ${event.type} for ${paymentIntentId} (ref: ${paymentIntent.metadata.ref})`
+      );
+
+      if (PEPTIDE_STORE_WEBHOOK_URL) {
+        try {
+          const callbackResponse = await fetch(PEPTIDE_STORE_WEBHOOK_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-gateway-secret": GATEWAY_SECRET,
+            },
+            body: JSON.stringify({
+              event: event.type,
+              paymentIntentId,
+              ref: paymentIntent.metadata.ref || "",
+              status: charge.status,
+              amount: paymentIntent.amount / 100,
+              amountRefunded: charge.amount_refunded / 100,
+            }),
+          });
+
+          if (!callbackResponse.ok) {
+            console.error(
+              `[GATEWAY-WEBHOOK] Refund callback failed: ${callbackResponse.status}`
+            );
+          } else {
+            console.log("[GATEWAY-WEBHOOK] Refund callback sent successfully");
+          }
+        } catch (callbackError) {
+          console.error(
+            "[GATEWAY-WEBHOOK] Failed to send refund callback:",
+            callbackError
+          );
         }
       } else {
         console.warn(
