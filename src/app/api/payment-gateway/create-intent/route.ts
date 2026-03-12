@@ -55,6 +55,12 @@ export async function POST(request: NextRequest) {
     console.log(
       `[PAYMENT-GATEWAY] Authenticated client: ${client.id} (${client.label})`
     );
+    console.log(
+      `[PAYMENT-GATEWAY] [${client.id}] Client config keys: ${Object.keys(client).join(", ")}`
+    );
+    console.log(
+      `[PAYMENT-GATEWAY] [${client.id}] connectedAccountId: ${client.connectedAccountId ?? "NOT SET"}, platformFeeRate: ${client.platformFeeRate ?? "NOT SET"}`
+    );
 
     const body = await request.json();
     const { amount, ref } = body;
