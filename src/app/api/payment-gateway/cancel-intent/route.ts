@@ -1,17 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2026-01-28.clover",
-});
-
-const GATEWAY_SECRET = process.env.PAYMENT_GATEWAY_SECRET || "";
+import { getClientBySecret } from "../clients";
 
 /**
  * POST /api/payment-gateway/cancel-intent
  *
- * Cancels a PaymentIntent that is no longer needed (e.g. when a replacement
- * PI was created because the update-intent endpoint wasn't available).
+ * Multi-tenant: identifies the calling client, verifies the PaymentIntent
+ * belongs to that client (via metadata.clientId), then cancels it.
+ *
+ * Uses the client's own Stripe keys if configured, otherwise falls back to
+ * the gateway's default keys.
  *
  * Request body:
  *   paymentIntentId - Stripe PaymentIntent ID to cancel
@@ -23,10 +21,16 @@ const GATEWAY_SECRET = process.env.PAYMENT_GATEWAY_SECRET || "";
  */
 export async function POST(request: NextRequest) {
   try {
-    // Authenticate the request
+    // Authenticate and identify the client
     const authHeader = request.headers.get("x-gateway-secret");
-    if (!authHeader || authHeader !== GATEWAY_SECRET) {
-      console.error("[PAYMENT-GATEWAY] Unauthorized cancel-intent request");
+    if (!authHeader) {
+      console.error("[PAYMENT-GATEWAY] Missing x-gateway-secret header");
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const client = getClientBySecret(authHeader);
+    if (!client) {
+      console.error("[PAYMENT-GATEWAY] Unknown client secret");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -41,19 +45,27 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(
-      `[PAYMENT-GATEWAY] Cancel request for PI: ${paymentIntentId}`
+      `[PAYMENT-GATEWAY] [${client.id}] Cancel request for PI: ${paymentIntentId}`
     );
 
-    // Retrieve the PI to verify it belongs to this gateway
+    // Use client-specific Stripe keys if present, otherwise fall back to gateway defaults
+    const stripeSecretKey =
+      client.stripeSecretKey || process.env.STRIPE_SECRET_KEY || "";
+
+    const stripe = new Stripe(stripeSecretKey, {
+      apiVersion: "2026-01-28.clover",
+    });
+
+    // Retrieve the PI to verify ownership
     const paymentIntent =
       await stripe.paymentIntents.retrieve(paymentIntentId);
 
-    if (paymentIntent.metadata?.source !== "payment-gateway") {
+    if (paymentIntent.metadata?.clientId !== client.id) {
       console.error(
-        `[PAYMENT-GATEWAY] PI ${paymentIntentId} is not a gateway payment (source=${paymentIntent.metadata?.source})`
+        `[PAYMENT-GATEWAY] [${client.id}] PI ${paymentIntentId} belongs to client "${paymentIntent.metadata?.clientId}", not "${client.id}"`
       );
       return NextResponse.json(
-        { error: "Payment intent not found" },
+        { error: "Payment intent not found for this client" },
         { status: 403 }
       );
     }
@@ -67,7 +79,7 @@ export async function POST(request: NextRequest) {
     ];
     if (!cancellableStatuses.includes(paymentIntent.status)) {
       console.log(
-        `[PAYMENT-GATEWAY] PI ${paymentIntentId} status is "${paymentIntent.status}" — not cancellable`
+        `[PAYMENT-GATEWAY] [${client.id}] PI ${paymentIntentId} status is "${paymentIntent.status}" — not cancellable`
       );
       return NextResponse.json({
         success: false,
@@ -79,7 +91,7 @@ export async function POST(request: NextRequest) {
     const canceled = await stripe.paymentIntents.cancel(paymentIntentId);
 
     console.log(
-      `[PAYMENT-GATEWAY] PI ${paymentIntentId} canceled (was ${paymentIntent.status})`
+      `[PAYMENT-GATEWAY] [${client.id}] PI ${paymentIntentId} canceled (was ${paymentIntent.status})`
     );
 
     return NextResponse.json({

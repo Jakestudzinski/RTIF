@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
+import { getClientBySecret } from "../clients";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2026-01-28.clover",
-});
-
-const GATEWAY_SECRET = process.env.PAYMENT_GATEWAY_SECRET || "";
 const GATEWAY_REDIRECT_BASE =
   process.env.NEXT_PUBLIC_SITE_URL || "https://www.research-tif.com";
 
@@ -21,8 +17,13 @@ function getDescription(amount: number): string {
 /**
  * POST /api/payment-gateway/create-intent
  *
- * Creates a Stripe PaymentIntent on research-tif.com's Stripe account
- * with a generic description.
+ * Multi-tenant gateway: identifies the calling client by their shared secret
+ * (x-gateway-secret header), creates a Stripe PaymentIntent with a generic
+ * description, and stores the client ID in metadata for webhook/redirect routing.
+ *
+ * If the client has its own Stripe keys in clients.json, the PaymentIntent is
+ * created on that client's Stripe account. Otherwise falls back to the
+ * gateway's default Stripe keys.
  *
  * Request body:
  *   amount        - dollar amount (e.g. 149.99)
@@ -32,28 +33,33 @@ function getDescription(amount: number): string {
  *   clientSecret        - Stripe PaymentIntent client secret
  *   paymentIntentId     - Stripe PaymentIntent ID
  *   publishableKey      - The publishable key the frontend should use
+ *   returnUrl           - Redirect URL through research-tif.com (for Klarna/Affirm)
  */
 export async function POST(request: NextRequest) {
   try {
-    // Authenticate the request
+    // Authenticate and identify the client by their shared secret
     const authHeader = request.headers.get("x-gateway-secret");
-    if (!authHeader || authHeader !== GATEWAY_SECRET) {
-      console.error("[PAYMENT-GATEWAY] Unauthorized request");
-      return NextResponse.json(
-        { error: "Unauthorized" },
-        { status: 401 }
-      );
+    if (!authHeader) {
+      console.error("[PAYMENT-GATEWAY] Missing x-gateway-secret header");
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const client = getClientBySecret(authHeader);
+    if (!client) {
+      console.error("[PAYMENT-GATEWAY] Unknown client secret");
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    console.log(
+      `[PAYMENT-GATEWAY] Authenticated client: ${client.id} (${client.label})`
+    );
 
     const body = await request.json();
     const { amount, ref } = body;
 
     // Validate amount
     if (!amount || typeof amount !== "number" || amount <= 0) {
-      return NextResponse.json(
-        { error: "Invalid amount" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
     }
 
     // Determine payment methods based on amount
@@ -68,8 +74,20 @@ export async function POST(request: NextRequest) {
     const amountInCents = Math.round(amount * 100);
 
     console.log(
-      `[PAYMENT-GATEWAY] Creating intent: $${amount.toFixed(2)} (${amountInCents} cents) — "${description}" ref=${ref || "none"}`
+      `[PAYMENT-GATEWAY] [${client.id}] Creating intent: $${amount.toFixed(2)} (${amountInCents} cents) — "${description}" ref=${ref || "none"}`
     );
+
+    // Use client-specific Stripe keys if present, otherwise fall back to gateway defaults
+    const stripeSecretKey =
+      client.stripeSecretKey || process.env.STRIPE_SECRET_KEY || "";
+    const stripePublishableKey =
+      client.stripePublishableKey ||
+      process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ||
+      "";
+
+    const stripe = new Stripe(stripeSecretKey, {
+      apiVersion: "2026-01-28.clover",
+    });
 
     // Create PaymentIntent with ONLY generic info — no product details, no customer PII
     const paymentIntent = await stripe.paymentIntents.create({
@@ -80,20 +98,23 @@ export async function POST(request: NextRequest) {
       metadata: {
         ref: ref || "",
         source: "payment-gateway",
+        clientId: client.id,
       },
     });
 
-    console.log(`[PAYMENT-GATEWAY] Created: ${paymentIntent.id}`);
+    console.log(
+      `[PAYMENT-GATEWAY] [${client.id}] Created: ${paymentIntent.id}`
+    );
 
-    // Build a redirect URL through research-tif.com — only contains the opaque ref,
-    // never the client's domain. The redirect endpoint resolves the destination
-    // from a server-side env var (GATEWAY_CLIENT_REDIRECT_URL).
+    // Build redirect URL — only contains the opaque ref. The redirect handler
+    // resolves the client from the PaymentIntent metadata (Stripe appends
+    // payment_intent= automatically), so no client data appears in the URL.
     const redirectUrl = `${GATEWAY_REDIRECT_BASE}/api/payment-gateway/redirect?ref=${encodeURIComponent(ref || "")}`;
 
     return NextResponse.json({
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
-      publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || "",
+      publishableKey: stripePublishableKey,
       returnUrl: redirectUrl,
     });
   } catch (error) {

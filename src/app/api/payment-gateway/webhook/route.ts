@@ -1,30 +1,100 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
+import { getClientById, GatewayClient } from "../clients";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2026-01-28.clover",
-});
+// Events we don't need to forward — acknowledge silently
+const IGNORED_EVENTS = [
+  "payment_intent.created",
+  "charge.succeeded",
+  "charge.updated",
+  "charge.failed",
+];
 
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || "";
-const GATEWAY_SECRET = process.env.PAYMENT_GATEWAY_SECRET || "";
-const PEPTIDE_STORE_WEBHOOK_URL = process.env.PEPTIDE_STORE_WEBHOOK_URL || "";
+/**
+ * Build a Stripe instance for a given client (per-client keys) or fall back
+ * to the gateway's default keys.
+ */
+function stripeForClient(client: GatewayClient | null): Stripe {
+  const key =
+    client?.stripeSecretKey || process.env.STRIPE_SECRET_KEY || "";
+  return new Stripe(key, { apiVersion: "2026-01-28.clover" });
+}
 
-// Startup diagnostics
-console.log(
-  "[GATEWAY-WEBHOOK] PEPTIDE_STORE_WEBHOOK_URL:",
-  PEPTIDE_STORE_WEBHOOK_URL
-    ? `${PEPTIDE_STORE_WEBHOOK_URL.substring(0, 40)}...`
-    : "NOT SET — callbacks will fail!"
-);
+/**
+ * Resolve the webhook signing secret. If a `?cid=` query param is present and
+ * that client has its own `stripeWebhookSecret`, use it. Otherwise fall back
+ * to the gateway's default STRIPE_WEBHOOK_SECRET.
+ */
+function resolveWebhookSecret(request: NextRequest): {
+  secret: string;
+  client: GatewayClient | null;
+} {
+  const { searchParams } = new URL(request.url);
+  const cid = searchParams.get("cid");
+  if (cid) {
+    const client = getClientById(cid);
+    if (client?.stripeWebhookSecret) {
+      return { secret: client.stripeWebhookSecret, client };
+    }
+  }
+  return {
+    secret: process.env.STRIPE_WEBHOOK_SECRET || "",
+    client: null,
+  };
+}
+
+/**
+ * Forward an event payload to a client's webhook URL.
+ */
+async function forwardToClient(
+  client: GatewayClient,
+  payload: Record<string, unknown>
+): Promise<void> {
+  if (!client.webhookUrl) {
+    console.warn(
+      `[GATEWAY-WEBHOOK] [${client.id}] No webhookUrl configured`
+    );
+    return;
+  }
+
+  try {
+    const res = await fetch(client.webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-gateway-secret": client.secret,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      console.error(
+        `[GATEWAY-WEBHOOK] [${client.id}] Callback failed: ${res.status}`
+      );
+    } else {
+      console.log(
+        `[GATEWAY-WEBHOOK] [${client.id}] Callback sent successfully`
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[GATEWAY-WEBHOOK] [${client.id}] Failed to send callback:`,
+      err
+    );
+    // Don't fail the webhook — Stripe will retry
+  }
+}
 
 /**
  * POST /api/payment-gateway/webhook
  *
- * Receives Stripe webhook events for gateway payments and forwards
- * relevant events to the peptide store's callback endpoint.
+ * Multi-tenant webhook: receives Stripe events, reads the clientId from
+ * PaymentIntent metadata, looks up the client's webhook URL from clients.json,
+ * and forwards the event to the correct client.
  *
- * Only forwards events for PaymentIntents that have source=payment-gateway
- * in their metadata.
+ * Supports per-client Stripe webhook secrets via ?cid= query param
+ * (recommended: set the webhook URL in Stripe Dashboard to
+ *  research-tif.com/api/payment-gateway/webhook?cid=<client-id>)
  *
  * Handled events:
  *   payment_intent.succeeded
@@ -45,7 +115,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Verify the webhook signature
+    // Resolve which webhook secret to use (per-client or default)
+    const { secret: webhookSecret, client: cidClient } =
+      resolveWebhookSecret(request);
+
+    // We need a Stripe instance to verify the signature — use the cid client's
+    // keys if available, otherwise the gateway default
+    const stripe = stripeForClient(cidClient);
+
     let event: Stripe.Event;
     try {
       event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
@@ -61,14 +138,13 @@ export async function POST(request: NextRequest) {
       `[GATEWAY-WEBHOOK] Received event: ${event.type} (${event.id})`
     );
 
-    // Only process payment_intent events
+    // ── Payment Intent events ────────────────────────────────────────────
     if (
       event.type === "payment_intent.succeeded" ||
       event.type === "payment_intent.payment_failed"
     ) {
       const paymentIntent = event.data.object as Stripe.PaymentIntent;
 
-      // Only forward events for gateway payments
       if (paymentIntent.metadata?.source !== "payment-gateway") {
         console.log(
           `[GATEWAY-WEBHOOK] Skipping non-gateway payment: ${paymentIntent.id}`
@@ -76,51 +152,38 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ received: true });
       }
 
+      const clientId = paymentIntent.metadata.clientId;
+      if (!clientId) {
+        console.error(
+          `[GATEWAY-WEBHOOK] No clientId in metadata for PI: ${paymentIntent.id}`
+        );
+        return NextResponse.json({ received: true });
+      }
+
+      const client = getClientById(clientId);
+      if (!client) {
+        console.error(
+          `[GATEWAY-WEBHOOK] Unknown clientId "${clientId}" for PI: ${paymentIntent.id}`
+        );
+        return NextResponse.json({ received: true });
+      }
+
       console.log(
-        `[GATEWAY-WEBHOOK] Forwarding ${event.type} for ${paymentIntent.id} (ref: ${paymentIntent.metadata.ref})`
+        `[GATEWAY-WEBHOOK] [${client.id}] Forwarding ${event.type} for ${paymentIntent.id} (ref: ${paymentIntent.metadata.ref})`
       );
 
-      // Forward to the peptide store
-      if (PEPTIDE_STORE_WEBHOOK_URL) {
-        try {
-          const callbackResponse = await fetch(PEPTIDE_STORE_WEBHOOK_URL, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-gateway-secret": GATEWAY_SECRET,
-            },
-            body: JSON.stringify({
-              event: event.type,
-              paymentIntentId: paymentIntent.id,
-              ref: paymentIntent.metadata.ref || "",
-              status: paymentIntent.status,
-              amount: paymentIntent.amount / 100, // Convert cents back to dollars
-            }),
-          });
+      await forwardToClient(client, {
+        event: event.type,
+        paymentIntentId: paymentIntent.id,
+        ref: paymentIntent.metadata.ref || "",
+        status: paymentIntent.status,
+        amount: paymentIntent.amount / 100,
+      });
 
-          if (!callbackResponse.ok) {
-            console.error(
-              `[GATEWAY-WEBHOOK] Callback failed: ${callbackResponse.status}`
-            );
-          } else {
-            console.log("[GATEWAY-WEBHOOK] Callback sent successfully");
-          }
-        } catch (callbackError) {
-          console.error(
-            "[GATEWAY-WEBHOOK] Failed to send callback:",
-            callbackError
-          );
-          // Don't fail the webhook — Stripe will retry
-        }
-      } else {
-        console.warn(
-          "[GATEWAY-WEBHOOK] PEPTIDE_STORE_WEBHOOK_URL not configured"
-        );
-      }
+      return NextResponse.json({ received: true });
     }
 
-    // Handle refund events — these fire on Charge objects, so we need to
-    // retrieve the linked PaymentIntent to check gateway metadata
+    // ── Refund events ────────────────────────────────────────────────────
     if (
       event.type === "charge.refunded" ||
       event.type === "charge.refund.updated"
@@ -138,9 +201,10 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ received: true });
       }
 
-      // Retrieve the PI to check gateway metadata
-      const paymentIntent =
-        await stripe.paymentIntents.retrieve(paymentIntentId);
+      const paymentIntent = await stripe.paymentIntents.retrieve(
+        paymentIntentId
+      );
+
       if (paymentIntent.metadata?.source !== "payment-gateway") {
         console.log(
           `[GATEWAY-WEBHOOK] Skipping non-gateway refund: ${paymentIntentId}`
@@ -148,56 +212,33 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ received: true });
       }
 
+      const clientId = paymentIntent.metadata.clientId;
+      const client = clientId ? getClientById(clientId) : null;
+      if (!client) {
+        console.error(
+          `[GATEWAY-WEBHOOK] Unknown clientId "${clientId}" for refund PI: ${paymentIntentId}`
+        );
+        return NextResponse.json({ received: true });
+      }
+
       console.log(
-        `[GATEWAY-WEBHOOK] Forwarding ${event.type} for ${paymentIntentId} (ref: ${paymentIntent.metadata.ref})`
+        `[GATEWAY-WEBHOOK] [${client.id}] Forwarding ${event.type} for ${paymentIntentId} (ref: ${paymentIntent.metadata.ref})`
       );
 
-      if (PEPTIDE_STORE_WEBHOOK_URL) {
-        try {
-          const callbackResponse = await fetch(PEPTIDE_STORE_WEBHOOK_URL, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-gateway-secret": GATEWAY_SECRET,
-            },
-            body: JSON.stringify({
-              event: event.type,
-              paymentIntentId,
-              ref: paymentIntent.metadata.ref || "",
-              status: charge.status,
-              amount: paymentIntent.amount / 100,
-              amountRefunded: charge.amount_refunded / 100,
-            }),
-          });
+      await forwardToClient(client, {
+        event: event.type,
+        paymentIntentId,
+        ref: paymentIntent.metadata.ref || "",
+        status: charge.status,
+        amount: paymentIntent.amount / 100,
+        amountRefunded: charge.amount_refunded / 100,
+      });
 
-          if (!callbackResponse.ok) {
-            console.error(
-              `[GATEWAY-WEBHOOK] Refund callback failed: ${callbackResponse.status}`
-            );
-          } else {
-            console.log("[GATEWAY-WEBHOOK] Refund callback sent successfully");
-          }
-        } catch (callbackError) {
-          console.error(
-            "[GATEWAY-WEBHOOK] Failed to send refund callback:",
-            callbackError
-          );
-        }
-      } else {
-        console.warn(
-          "[GATEWAY-WEBHOOK] PEPTIDE_STORE_WEBHOOK_URL not configured"
-        );
-      }
+      return NextResponse.json({ received: true });
     }
 
-    // Known events we don't need to act on — acknowledge silently
-    const ignoredEvents = [
-      "payment_intent.created",
-      "charge.succeeded",
-      "charge.updated",
-      "charge.failed",
-    ];
-    if (ignoredEvents.includes(event.type)) {
+    // ── Acknowledged / unhandled events ──────────────────────────────────
+    if (IGNORED_EVENTS.includes(event.type)) {
       console.log(
         `[GATEWAY-WEBHOOK] Acknowledged (no action needed): ${event.type}`
       );

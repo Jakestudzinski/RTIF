@@ -1,0 +1,19 @@
+{
+  "clients": {
+    "a1b2c3": {
+      "secret": "REPLACE_WITH_STRONG_SECRET",
+      "webhookUrl": "https://yourdomain.com/api/webhooks/payment-gateway",
+      "redirectUrl": "https://yourdomain.com/checkout/success",
+      "label": "Human-readable name (only visible in logs)"
+    },
+    "d4e5f6": {
+      "secret": "REPLACE_WITH_STRONG_SECRET",
+      "stripeSecretKey": "sk_live_...",
+      "stripePublishableKey": "pk_live_...",
+      "stripeWebhookSecret": "whsec_...",
+      "webhookUrl": "https://yourdomain.com/api/webhooks/payment-gateway",
+      "redirectUrl": "https://yourdomain.com/checkout/success",
+      "label": "Client with own Stripe account"
+    }
+  }
+}

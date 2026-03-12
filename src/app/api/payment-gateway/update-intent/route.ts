@@ -1,11 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2026-01-28.clover",
-});
-
-const GATEWAY_SECRET = process.env.PAYMENT_GATEWAY_SECRET || "";
+import { getClientBySecret } from "../clients";
 
 /**
  * Determine the generic Stripe description based on order amount.
@@ -17,11 +12,13 @@ function getDescription(amount: number): string {
 }
 
 /**
- * POST /api/update-intent
+ * POST /api/payment-gateway/update-intent
  *
- * Updates an existing PaymentIntent's amount. Used when the client-side
- * total changes after the initial PaymentIntent was created (e.g. a promo
- * code is applied or removed).
+ * Multi-tenant: identifies the calling client, verifies the PaymentIntent
+ * belongs to that client (via metadata.clientId), then updates the amount.
+ *
+ * Uses the client's own Stripe keys if configured, otherwise falls back to
+ * the gateway's default keys.
  *
  * Request body:
  *   paymentIntentId - the Stripe PaymentIntent ID to update
@@ -34,12 +31,22 @@ function getDescription(amount: number): string {
  */
 export async function POST(request: NextRequest) {
   try {
-    // Authenticate the request
+    // Authenticate and identify the client
     const authHeader = request.headers.get("x-gateway-secret");
-    if (!authHeader || authHeader !== GATEWAY_SECRET) {
-      console.error("[PAYMENT-GATEWAY] Unauthorized update-intent request");
+    if (!authHeader) {
+      console.error("[PAYMENT-GATEWAY] Missing x-gateway-secret header");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const client = getClientBySecret(authHeader);
+    if (!client) {
+      console.error("[PAYMENT-GATEWAY] Unknown client secret");
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    console.log(
+      `[PAYMENT-GATEWAY] Authenticated client: ${client.id} (${client.label})`
+    );
 
     const body = await request.json();
     const { paymentIntentId, amount } = body;
@@ -59,17 +66,25 @@ export async function POST(request: NextRequest) {
     const description = getDescription(amount);
 
     console.log(
-      `[PAYMENT-GATEWAY] Updating PI ${paymentIntentId}: $${amount.toFixed(2)} (${amountInCents} cents) — "${description}"`
+      `[PAYMENT-GATEWAY] [${client.id}] Updating PI ${paymentIntentId}: $${amount.toFixed(2)} (${amountInCents} cents) — "${description}"`
     );
 
-    // Verify the PI was created by this gateway before updating
+    // Use client-specific Stripe keys if present, otherwise fall back to gateway defaults
+    const stripeSecretKey =
+      client.stripeSecretKey || process.env.STRIPE_SECRET_KEY || "";
+
+    const stripe = new Stripe(stripeSecretKey, {
+      apiVersion: "2026-01-28.clover",
+    });
+
+    // Verify the PI belongs to this client before updating
     const existingPI = await stripe.paymentIntents.retrieve(paymentIntentId);
-    if (existingPI.metadata?.source !== "payment-gateway") {
+    if (existingPI.metadata?.clientId !== client.id) {
       console.error(
-        `[PAYMENT-GATEWAY] PI ${paymentIntentId} is not a gateway payment (source=${existingPI.metadata?.source})`
+        `[PAYMENT-GATEWAY] [${client.id}] PI ${paymentIntentId} does not belong to this client (metadata.clientId=${existingPI.metadata?.clientId})`
       );
       return NextResponse.json(
-        { error: "Payment intent not found" },
+        { error: "Payment intent not found for this client" },
         { status: 403 }
       );
     }
@@ -81,7 +96,7 @@ export async function POST(request: NextRequest) {
     });
 
     console.log(
-      `[PAYMENT-GATEWAY] Updated PI ${paymentIntentId} to ${amountInCents} cents`
+      `[PAYMENT-GATEWAY] [${client.id}] Updated PI ${paymentIntentId} to ${amountInCents} cents`
     );
 
     return NextResponse.json({
