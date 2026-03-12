@@ -4,6 +4,8 @@ export interface GatewayClient {
   stripeSecretKey?: string;
   stripePublishableKey?: string;
   stripeWebhookSecret?: string;
+  connectedAccountId?: string;
+  platformFeeRate?: number;
   webhookUrl: string;
   redirectUrl: string;
   label: string;

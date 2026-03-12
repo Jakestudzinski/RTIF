@@ -22,8 +22,10 @@ function getDescription(amount: number): string {
  * description, and stores the client ID in metadata for webhook/redirect routing.
  *
  * If the client has its own Stripe keys in clients.json, the PaymentIntent is
- * created on that client's Stripe account. Otherwise falls back to the
- * gateway's default Stripe keys.
+ * created on that client's Stripe account. If the client has a
+ * connectedAccountId, the PaymentIntent is created on the platform account
+ * with transfer_data routing funds to the connected account (minus the
+ * platform fee). Otherwise falls back to the gateway's default Stripe keys.
  *
  * Request body:
  *   amount        - dollar amount (e.g. 149.99)
@@ -89,8 +91,8 @@ export async function POST(request: NextRequest) {
       apiVersion: "2026-01-28.clover",
     });
 
-    // Create PaymentIntent with ONLY generic info — no product details, no customer PII
-    const paymentIntent = await stripe.paymentIntents.create({
+    // Build the PaymentIntent create params
+    const createParams: Stripe.PaymentIntentCreateParams = {
       amount: amountInCents,
       currency: "usd",
       payment_method_types: paymentMethodTypes,
@@ -100,7 +102,24 @@ export async function POST(request: NextRequest) {
         source: "payment-gateway",
         clientId: client.id,
       },
-    });
+    };
+
+    // If the client has a connected account, route funds via transfer_data
+    // and charge a platform fee
+    if (client.connectedAccountId) {
+      const feeRate = client.platformFeeRate ?? 0.07;
+      createParams.transfer_data = {
+        destination: client.connectedAccountId,
+      };
+      createParams.application_fee_amount = Math.round(amountInCents * feeRate);
+
+      console.log(
+        `[PAYMENT-GATEWAY] [${client.id}] Connect transfer → ${client.connectedAccountId} (fee: ${(feeRate * 100).toFixed(1)}% = ${createParams.application_fee_amount} cents)`
+      );
+    }
+
+    // Create PaymentIntent with ONLY generic info — no product details, no customer PII
+    const paymentIntent = await stripe.paymentIntents.create(createParams);
 
     console.log(
       `[PAYMENT-GATEWAY] [${client.id}] Created: ${paymentIntent.id}`

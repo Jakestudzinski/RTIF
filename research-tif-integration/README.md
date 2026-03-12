@@ -106,6 +106,68 @@ The client business needs these files (see peptide store as reference):
 - Webhook callbacks to clients are authenticated with each client's own secret
 - PaymentIntent metadata contains only: `ref` (opaque), `source`, `clientId`
 
+## Client Configuration Modes
+
+The gateway supports three client configuration modes in `clients.json`:
+
+### Mode 1: Standalone (gateway default keys)
+
+Payments are created using the gateway's default Stripe keys. Simplest setup.
+
+```json
+{
+  "secret": "...",
+  "webhookUrl": "https://client.com/api/webhooks/payment-gateway",
+  "redirectUrl": "https://client.com/checkout/success",
+  "label": "Client Name"
+}
+```
+
+### Mode 2: Per-Client Stripe Keys
+
+Payments are created on the client's own Stripe account. The client manages
+their own Stripe dashboard, disputes, and payouts independently.
+
+```json
+{
+  "secret": "...",
+  "stripeSecretKey": "sk_live_...",
+  "stripePublishableKey": "pk_live_...",
+  "stripeWebhookSecret": "whsec_...",
+  "webhookUrl": "...",
+  "redirectUrl": "...",
+  "label": "Client with own Stripe"
+}
+```
+
+### Mode 3: Stripe Connect (connected account with platform fee)
+
+Payments are created on the **platform account** with `transfer_data` routing
+funds to the client's connected account. The platform automatically retains the
+configured fee percentage.
+
+```json
+{
+  "secret": "...",
+  "connectedAccountId": "acct_...",
+  "platformFeeRate": 0.07,
+  "webhookUrl": "...",
+  "redirectUrl": "...",
+  "label": "Connect client (7% fee)"
+}
+```
+
+**How the fee works:**
+- Customer pays $100 → Stripe creates PaymentIntent for $100 on the platform
+- `application_fee_amount` = $100 × 7% = $7.00 retained by the platform
+- `transfer_data.destination` = `acct_...` → $93.00 auto-transferred to connected account
+- Stripe's own processing fee (~2.9% + 30¢) is deducted from the connected account's portion
+
+**Stripe Dashboard requirements for Connect:**
+1. Enable Connect in your platform Stripe dashboard
+2. Create the connected account and complete onboarding (identity verification)
+3. The connected account ID (`acct_...`) goes in `clients.json`
+
 ## Description Tiers
 
 | Order Amount | Stripe Description |

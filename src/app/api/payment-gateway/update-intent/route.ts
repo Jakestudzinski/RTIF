@@ -89,11 +89,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Update the amount and description
-    await stripe.paymentIntents.update(paymentIntentId, {
+    // Build update params
+    const updateParams: Stripe.PaymentIntentUpdateParams = {
       amount: amountInCents,
       description,
-    });
+    };
+
+    // Recalculate the platform fee if this is a connected-account client
+    if (client.connectedAccountId) {
+      const feeRate = client.platformFeeRate ?? 0.07;
+      updateParams.application_fee_amount = Math.round(amountInCents * feeRate);
+
+      console.log(
+        `[PAYMENT-GATEWAY] [${client.id}] Connect fee updated → ${updateParams.application_fee_amount} cents (${(feeRate * 100).toFixed(1)}%)`
+      );
+    }
+
+    await stripe.paymentIntents.update(paymentIntentId, updateParams);
 
     console.log(
       `[PAYMENT-GATEWAY] [${client.id}] Updated PI ${paymentIntentId} to ${amountInCents} cents`

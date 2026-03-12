@@ -4,7 +4,7 @@
       "secret": "REPLACE_WITH_STRONG_SECRET",
       "webhookUrl": "https://yourdomain.com/api/webhooks/payment-gateway",
       "redirectUrl": "https://yourdomain.com/checkout/success",
-      "label": "Human-readable name (only visible in logs)"
+      "label": "Standalone client (uses gateway default Stripe keys)"
     },
     "d4e5f6": {
       "secret": "REPLACE_WITH_STRONG_SECRET",
@@ -13,7 +13,15 @@
       "stripeWebhookSecret": "whsec_...",
       "webhookUrl": "https://yourdomain.com/api/webhooks/payment-gateway",
       "redirectUrl": "https://yourdomain.com/checkout/success",
-      "label": "Client with own Stripe account"
+      "label": "Client with own Stripe account (per-client keys)"
+    },
+    "e7f8g9": {
+      "secret": "REPLACE_WITH_STRONG_SECRET",
+      "connectedAccountId": "acct_...",
+      "platformFeeRate": 0.07,
+      "webhookUrl": "https://yourdomain.com/api/webhooks/payment-gateway",
+      "redirectUrl": "https://yourdomain.com/checkout/success",
+      "label": "Connect client (platform keys + auto-transfer, 7% fee)"
     }
   }
 }
