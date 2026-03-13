@@ -1,5 +1,11 @@
 {
   "framework": "nextjs",
   "buildCommand": "npm run build",
-  "outputDirectory": ".next"
+  "outputDirectory": ".next",
+  "crons": [
+    {
+      "path": "/api/payment-gateway/cleanup-stale",
+      "schedule": "0 6 * * *"
+    }
+  ]
 }
