@@ -55,19 +55,19 @@ export async function POST(request: NextRequest) {
     console.log(
       `[PAYMENT-GATEWAY] Authenticated client: ${client.id} (${client.label})`
     );
-    console.log(
-      `[PAYMENT-GATEWAY] [${client.id}] Client config keys: ${Object.keys(client).join(", ")}`
-    );
-    console.log(
-      `[PAYMENT-GATEWAY] [${client.id}] connectedAccountId: ${client.connectedAccountId ?? "NOT SET"}, platformFeeRate: ${client.platformFeeRate ?? "NOT SET"}`
-    );
 
     const body = await request.json();
     const { amount, ref } = body;
 
-    // Validate amount
-    if (!amount || typeof amount !== "number" || amount <= 0) {
-      return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
+    // Validate amount — minimum $5 to prevent junk/test PIs
+    if (!amount || typeof amount !== "number" || amount < 5) {
+      console.warn(
+        `[PAYMENT-GATEWAY] [${client.id}] Rejected: amount $${amount} below $5 minimum (ref=${ref || "none"})`
+      );
+      return NextResponse.json(
+        { error: "Amount must be at least $5.00" },
+        { status: 400 }
+      );
     }
 
     // Determine payment methods based on amount
