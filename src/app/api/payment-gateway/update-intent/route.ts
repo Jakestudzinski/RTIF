@@ -1,32 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import Stripe from "stripe";
 import { getClientBySecret } from "../clients";
-
-/**
- * Determine the generic Stripe description based on order amount.
- */
-function getDescription(amount: number): string {
-  if (amount <= 100) return "Basic Technology Consultation";
-  if (amount <= 500) return "Mid Tier Technology Consultation";
-  return "All-In Consultation";
-}
+import { resolveProcessor } from "@/lib/processors";
 
 /**
  * POST /api/payment-gateway/update-intent
  *
- * Multi-tenant: identifies the calling client, verifies the PaymentIntent
- * belongs to that client (via metadata.clientId), then updates the amount.
- *
- * Uses the client's own Stripe keys if configured, otherwise falls back to
- * the gateway's default keys.
+ * Multi-tenant: identifies the calling client, verifies the payment
+ * intent/order belongs to that client, then updates the amount.
  *
  * Request body:
- *   paymentIntentId - the Stripe PaymentIntent ID to update
+ *   paymentIntentId - the intent/order ID to update
  *   amount          - new dollar amount (e.g. 129.99)
  *
  * Response:
  *   success         - boolean
- *   paymentIntentId - the updated PaymentIntent ID
+ *   paymentIntentId - the updated intent/order ID
  *   amount          - the new amount in cents
  */
 export async function POST(request: NextRequest) {
@@ -62,62 +50,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
     }
 
-    const amountInCents = Math.round(amount * 100);
-    const description = getDescription(amount);
-
+    const processor = resolveProcessor(client);
     console.log(
-      `[PAYMENT-GATEWAY] [${client.id}] Updating PI ${paymentIntentId}: $${amount.toFixed(2)} (${amountInCents} cents) — "${description}"`
+      `[PAYMENT-GATEWAY] [${client.id}] Using processor: ${processor.name}`
     );
 
-    // Use client-specific Stripe keys if present, otherwise fall back to gateway defaults
-    const stripeSecretKey =
-      client.stripeSecretKey || process.env.STRIPE_SECRET_KEY || "";
+    const result = await processor.updateIntent(client, paymentIntentId, amount);
 
-    const stripe = new Stripe(stripeSecretKey, {
-      apiVersion: "2026-01-28.clover",
-    });
-
-    // Verify the PI belongs to this client before updating
-    const existingPI = await stripe.paymentIntents.retrieve(paymentIntentId);
-    if (existingPI.metadata?.clientId !== client.id) {
-      console.error(
-        `[PAYMENT-GATEWAY] [${client.id}] PI ${paymentIntentId} does not belong to this client (metadata.clientId=${existingPI.metadata?.clientId})`
-      );
-      return NextResponse.json(
-        { error: "Payment intent not found for this client" },
-        { status: 403 }
-      );
-    }
-
-    // Build update params
-    const updateParams: Stripe.PaymentIntentUpdateParams = {
-      amount: amountInCents,
-      description,
-    };
-
-    // Recalculate the platform fee if this is a connected-account client
-    if (client.connectedAccountId) {
-      const feeRate = client.platformFeeRate ?? 0.07;
-      updateParams.application_fee_amount = Math.round(amountInCents * feeRate);
-
-      console.log(
-        `[PAYMENT-GATEWAY] [${client.id}] Connect fee updated → ${updateParams.application_fee_amount} cents (${(feeRate * 100).toFixed(1)}%)`
-      );
-    }
-
-    await stripe.paymentIntents.update(paymentIntentId, updateParams);
-
-    console.log(
-      `[PAYMENT-GATEWAY] [${client.id}] Updated PI ${paymentIntentId} to ${amountInCents} cents`
-    );
-
-    return NextResponse.json({
-      success: true,
-      paymentIntentId,
-      amount: amountInCents,
-    });
+    return NextResponse.json(result);
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to update payment intent";
     console.error("[PAYMENT-GATEWAY] Error updating payment intent:", error);
+
+    // Ownership verification failure → 403
+    if (message === "Payment intent not found for this client") {
+      return NextResponse.json({ error: message }, { status: 403 });
+    }
+
     return NextResponse.json(
       { error: "Failed to update payment intent" },
       { status: 500 }

@@ -1,11 +1,20 @@
 export interface GatewayClient {
   id: string;
   secret: string;
+  // Stripe config (existing)
   stripeSecretKey?: string;
   stripePublishableKey?: string;
   stripeWebhookSecret?: string;
   connectedAccountId?: string;
   platformFeeRate?: number;
+  // PayPal config (optional — clients without these fields remain Stripe-only)
+  paypalClientId?: string;
+  paypalClientSecret?: string;
+  paypalWebhookId?: string;
+  // Processor preference
+  preferredProcessor?: "stripe" | "paypal";
+  fallbackProcessor?: "stripe" | "paypal";
+  // Common
   webhookUrl: string;
   redirectUrl: string;
   label: string;

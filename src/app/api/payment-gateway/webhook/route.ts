@@ -1,47 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import Stripe from "stripe";
 import { getClientById, GatewayClient } from "../clients";
-
-// Events we don't need to forward — acknowledge silently
-const IGNORED_EVENTS = [
-  "payment_intent.created",
-  "charge.succeeded",
-  "charge.updated",
-  "charge.failed",
-];
-
-/**
- * Build a Stripe instance for a given client (per-client keys) or fall back
- * to the gateway's default keys.
- */
-function stripeForClient(client: GatewayClient | null): Stripe {
-  const key =
-    client?.stripeSecretKey || process.env.STRIPE_SECRET_KEY || "";
-  return new Stripe(key, { apiVersion: "2026-01-28.clover" });
-}
-
-/**
- * Resolve the webhook signing secret. If a `?cid=` query param is present and
- * that client has its own `stripeWebhookSecret`, use it. Otherwise fall back
- * to the gateway's default STRIPE_WEBHOOK_SECRET.
- */
-function resolveWebhookSecret(request: NextRequest): {
-  secret: string;
-  client: GatewayClient | null;
-} {
-  const { searchParams } = new URL(request.url);
-  const cid = searchParams.get("cid");
-  if (cid) {
-    const client = getClientById(cid);
-    if (client?.stripeWebhookSecret) {
-      return { secret: client.stripeWebhookSecret, client };
-    }
-  }
-  return {
-    secret: process.env.STRIPE_WEBHOOK_SECRET || "",
-    client: null,
-  };
-}
+import { resolveWebhookProcessor } from "@/lib/processors";
 
 /**
  * Forward an event payload to a client's webhook URL.
@@ -81,170 +40,105 @@ async function forwardToClient(
       `[GATEWAY-WEBHOOK] [${client.id}] Failed to send callback:`,
       err
     );
-    // Don't fail the webhook — Stripe will retry
+    // Don't fail the webhook — processor will retry
   }
 }
 
 /**
  * POST /api/payment-gateway/webhook
  *
- * Multi-tenant webhook: receives Stripe events, reads the clientId from
- * PaymentIntent metadata, looks up the client's webhook URL from clients.json,
- * and forwards the event to the correct client.
+ * Multi-tenant webhook: receives events from payment processors (Stripe,
+ * PayPal), verifies the signature, reads the clientId from metadata,
+ * looks up the client's webhook URL, and forwards the normalized event.
  *
- * Supports per-client Stripe webhook secrets via ?cid= query param
- * (recommended: set the webhook URL in Stripe Dashboard to
- *  research-tif.com/api/payment-gateway/webhook?cid=<client-id>)
- *
- * Handled events:
- *   payment_intent.succeeded
- *   payment_intent.payment_failed
- *   charge.refunded
- *   charge.refund.updated
+ * Supports per-client webhook secrets via ?cid= query param.
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.text();
-    const signature = request.headers.get("stripe-signature");
 
-    if (!signature) {
-      console.error("[GATEWAY-WEBHOOK] Missing stripe-signature header");
+    // Collect headers needed for verification
+    const headers: Record<string, string> = {};
+    const stripeSignature = request.headers.get("stripe-signature");
+    if (stripeSignature) headers["stripe-signature"] = stripeSignature;
+    // PayPal webhook headers (for future use)
+    const paypalTransmissionId = request.headers.get("paypal-transmission-id");
+    if (paypalTransmissionId) headers["paypal-transmission-id"] = paypalTransmissionId;
+    const paypalTransmissionSig = request.headers.get("paypal-transmission-sig");
+    if (paypalTransmissionSig) headers["paypal-transmission-sig"] = paypalTransmissionSig;
+    const paypalTransmissionTime = request.headers.get("paypal-transmission-time");
+    if (paypalTransmissionTime) headers["paypal-transmission-time"] = paypalTransmissionTime;
+    const paypalCertUrl = request.headers.get("paypal-cert-url");
+    if (paypalCertUrl) headers["paypal-cert-url"] = paypalCertUrl;
+    const paypalAuthAlgo = request.headers.get("paypal-auth-algo");
+    if (paypalAuthAlgo) headers["paypal-auth-algo"] = paypalAuthAlgo;
+
+    if (!stripeSignature && !paypalTransmissionId) {
+      console.error("[GATEWAY-WEBHOOK] Missing processor signature header");
       return NextResponse.json(
-        { error: "Missing stripe-signature header" },
+        { error: "Missing signature header" },
         { status: 400 }
       );
     }
 
-    // Resolve which webhook secret to use (per-client or default)
-    const { secret: webhookSecret, client: cidClient } =
-      resolveWebhookSecret(request);
+    // Resolve which client sent via ?cid= (for per-client webhook secrets)
+    const { searchParams } = new URL(request.url);
+    const cid = searchParams.get("cid");
+    const cidClient = cid ? getClientById(cid) : null;
 
-    // We need a Stripe instance to verify the signature — use the cid client's
-    // keys if available, otherwise the gateway default
-    const stripe = stripeForClient(cidClient);
+    // Determine which processor this webhook belongs to
+    const processor = resolveWebhookProcessor(headers);
 
-    let event: Stripe.Event;
+    console.log(
+      `[GATEWAY-WEBHOOK] Processing ${processor.name} webhook${cidClient ? ` (cid: ${cidClient.id})` : ""}`
+    );
+
+    // Verify signature and parse the event
+    let event;
     try {
-      event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
+      event = await processor.verifyWebhook(body, headers, cidClient);
     } catch (err) {
-      console.error("[GATEWAY-WEBHOOK] Signature verification failed:", err);
+      const message = err instanceof Error ? err.message : "Verification failed";
+      console.error(`[GATEWAY-WEBHOOK] ${message}`);
       return NextResponse.json(
-        { error: "Webhook signature verification failed" },
+        { error: message },
         { status: 400 }
       );
+    }
+
+    // null means the event was acknowledged but doesn't need forwarding
+    if (!event) {
+      return NextResponse.json({ received: true });
+    }
+
+    // Look up the client to forward to
+    const client = getClientById(event.clientId);
+    if (!client) {
+      console.error(
+        `[GATEWAY-WEBHOOK] Unknown clientId "${event.clientId}" for ${event.paymentIntentId}`
+      );
+      return NextResponse.json({ received: true });
     }
 
     console.log(
-      `[GATEWAY-WEBHOOK] Received event: ${event.type} (${event.id})`
+      `[GATEWAY-WEBHOOK] [${client.id}] Forwarding ${event.rawType} for ${event.paymentIntentId} (ref: ${event.ref})`
     );
 
-    // ── Payment Intent events ────────────────────────────────────────────
-    if (
-      event.type === "payment_intent.succeeded" ||
-      event.type === "payment_intent.payment_failed"
-    ) {
-      const paymentIntent = event.data.object as Stripe.PaymentIntent;
+    // Build the forwarded payload
+    const payload: Record<string, unknown> = {
+      event: event.rawType,
+      paymentIntentId: event.paymentIntentId,
+      ref: event.ref,
+      status: event.status,
+      amount: event.amount,
+      processor: event.processor,
+    };
 
-      if (paymentIntent.metadata?.source !== "payment-gateway") {
-        console.log(
-          `[GATEWAY-WEBHOOK] Skipping non-gateway payment: ${paymentIntent.id}`
-        );
-        return NextResponse.json({ received: true });
-      }
-
-      const clientId = paymentIntent.metadata.clientId;
-      if (!clientId) {
-        console.error(
-          `[GATEWAY-WEBHOOK] No clientId in metadata for PI: ${paymentIntent.id}`
-        );
-        return NextResponse.json({ received: true });
-      }
-
-      const client = getClientById(clientId);
-      if (!client) {
-        console.error(
-          `[GATEWAY-WEBHOOK] Unknown clientId "${clientId}" for PI: ${paymentIntent.id}`
-        );
-        return NextResponse.json({ received: true });
-      }
-
-      console.log(
-        `[GATEWAY-WEBHOOK] [${client.id}] Forwarding ${event.type} for ${paymentIntent.id} (ref: ${paymentIntent.metadata.ref})`
-      );
-
-      await forwardToClient(client, {
-        event: event.type,
-        paymentIntentId: paymentIntent.id,
-        ref: paymentIntent.metadata.ref || "",
-        status: paymentIntent.status,
-        amount: paymentIntent.amount / 100,
-      });
-
-      return NextResponse.json({ received: true });
+    if (event.amountRefunded !== undefined) {
+      payload.amountRefunded = event.amountRefunded;
     }
 
-    // ── Refund events ────────────────────────────────────────────────────
-    if (
-      event.type === "charge.refunded" ||
-      event.type === "charge.refund.updated"
-    ) {
-      const charge = event.data.object as Stripe.Charge;
-      const paymentIntentId =
-        typeof charge.payment_intent === "string"
-          ? charge.payment_intent
-          : charge.payment_intent?.id;
-
-      if (!paymentIntentId) {
-        console.log(
-          `[GATEWAY-WEBHOOK] Skipping ${event.type} — no linked PaymentIntent`
-        );
-        return NextResponse.json({ received: true });
-      }
-
-      const paymentIntent = await stripe.paymentIntents.retrieve(
-        paymentIntentId
-      );
-
-      if (paymentIntent.metadata?.source !== "payment-gateway") {
-        console.log(
-          `[GATEWAY-WEBHOOK] Skipping non-gateway refund: ${paymentIntentId}`
-        );
-        return NextResponse.json({ received: true });
-      }
-
-      const clientId = paymentIntent.metadata.clientId;
-      const client = clientId ? getClientById(clientId) : null;
-      if (!client) {
-        console.error(
-          `[GATEWAY-WEBHOOK] Unknown clientId "${clientId}" for refund PI: ${paymentIntentId}`
-        );
-        return NextResponse.json({ received: true });
-      }
-
-      console.log(
-        `[GATEWAY-WEBHOOK] [${client.id}] Forwarding ${event.type} for ${paymentIntentId} (ref: ${paymentIntent.metadata.ref})`
-      );
-
-      await forwardToClient(client, {
-        event: event.type,
-        paymentIntentId,
-        ref: paymentIntent.metadata.ref || "",
-        status: charge.status,
-        amount: paymentIntent.amount / 100,
-        amountRefunded: charge.amount_refunded / 100,
-      });
-
-      return NextResponse.json({ received: true });
-    }
-
-    // ── Acknowledged / unhandled events ──────────────────────────────────
-    if (IGNORED_EVENTS.includes(event.type)) {
-      console.log(
-        `[GATEWAY-WEBHOOK] Acknowledged (no action needed): ${event.type}`
-      );
-    } else {
-      console.log(`[GATEWAY-WEBHOOK] Unhandled event type: ${event.type}`);
-    }
+    await forwardToClient(client, payload);
 
     return NextResponse.json({ received: true });
   } catch (error) {
