@@ -64,12 +64,12 @@ export class StripeProcessor implements PaymentProcessor {
 
     // Determine payment methods based on amount
     // Klarna and Affirm require minimum $35
+    // Note: apple_pay and google_pay are NOT valid payment_method_types — they
+    // are surfaced automatically through "card" by Stripe Elements on compatible devices.
     const paymentMethodTypes: string[] = ["card"];
     if (amount >= 35) {
       paymentMethodTypes.push("klarna");
       paymentMethodTypes.push("affirm");
-      paymentMethodTypes.push("apple_pay");
-      paymentMethodTypes.push("google_pay");
     }
 
     console.log(
