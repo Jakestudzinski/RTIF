@@ -14,7 +14,6 @@ import {
   Menu,
   X,
   Check,
-  Loader2,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -424,27 +423,8 @@ const pricingTiers = [
 ];
 
 function Pricing() {
-  const [loading, setLoading] = useState<string | null>(null);
-
-  async function handleCheckout(tier: string) {
-    setLoading(tier);
-    try {
-      const res = await fetch("/api/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier }),
-      });
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        alert(data.error || "Something went wrong. Please try again.");
-      }
-    } catch {
-      alert("Network error. Please try again.");
-    } finally {
-      setLoading(null);
-    }
+  function handleCheckout(tier: string) {
+    window.location.href = `/checkout?tier=${tier}`;
   }
 
   return (
@@ -516,17 +496,13 @@ function Pricing() {
               </ul>
               <button
                 onClick={() => handleCheckout(t.tier)}
-                disabled={loading === t.tier}
-                className={`w-full py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2 ${
+                className={`w-full py-3 rounded-lg font-semibold transition-colors ${
                   t.highlighted
                     ? "bg-white text-primary-600 hover:bg-primary-50"
                     : "bg-primary-600 text-white hover:bg-primary-700"
-                } disabled:opacity-70`}
+                }`}
               >
-                {loading === t.tier ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : null}
-                {loading === t.tier ? "Redirecting..." : "Get Started"}
+                Get Started
               </button>
             </div>
           ))}
@@ -546,6 +522,14 @@ function Footer() {
               <Cpu className="w-4 h-4 text-white" />
             </div>
             <span className="text-white font-bold">RTIF</span>
+          </div>
+          <div className="flex items-center gap-6 text-sm">
+            <a href="/privacy-policy" className="hover:text-white transition-colors">
+              Privacy Policy
+            </a>
+            <a href="/terms-of-service" className="hover:text-white transition-colors">
+              Terms of Service
+            </a>
           </div>
           <p className="text-sm">
             &copy; {new Date().getFullYear()} Research Technology Innovation &amp;
