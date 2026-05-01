@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Cpu, CreditCard, Lock, ArrowLeft, Check, Loader2 } from "lucide-react";
 import Link from "next/link";
@@ -163,7 +163,7 @@ function CheckoutForm({
   );
 }
 
-export default function CheckoutPage() {
+function CheckoutContent() {
   const searchParams = useSearchParams();
   const tier = searchParams.get("tier") || "basic";
   const [clientSecret, setClientSecret] = useState<string | null>(null);
@@ -350,5 +350,22 @@ export default function CheckoutPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function CheckoutPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen pt-24 pb-20 bg-gray-50">
+          <Navbar />
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="w-8 h-8 text-primary-600 animate-spin" />
+          </div>
+        </main>
+      }
+    >
+      <CheckoutContent />
+    </Suspense>
   );
 }
